@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -18,17 +19,17 @@ type Wave struct {
 }
 
 func main() {
-  // temporary while I'm figuring things out
+	// temporary while I'm figuring things out
 	file, err := os.Open("./sample.wav")
 	defer file.Close()
 	if err != nil {
 		panic(err)
 	}
-	Decode(file)
-	fmt.Println("Done!")
+	fmt.Println(Decode(file))
+  println("Done!")
 }
 
-func readId(file *os.File, id []byte) error {
+func readId(file io.Reader, id []byte) error {
 	dst := make([]byte, len(id))
 	n, err := file.Read(dst)
 	if err != nil {
@@ -40,7 +41,7 @@ func readId(file *os.File, id []byte) error {
 	return nil
 }
 
-func Decode(file *os.File) {
+func Decode(file io.Reader) (result Wave) {
 	err := readId(file, []byte("RIFF"))
 	if err != nil {
 		panic(err)
@@ -56,22 +57,47 @@ func Decode(file *os.File) {
 		fmt.Println(chunkSize)
 		panic(err)
 	}
-	audioFmt, numChan, sampRate, byteRate, _, bitsPerSample, _ := readFmtSection(file)
-	fmt.Println(audioFmt)
-	fmt.Println(numChan)
-	fmt.Println(sampRate)
-	fmt.Println(byteRate)
-	fmt.Println(bitsPerSample)
-	_ = readDataSection(file)
+	for {
+		_, err = file.Read(dst)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			panic(err)
+		}
+		switch string(dst) {
+		case "fmt ":
+			audioFmt, numChan, sampleRate, _, _, bitsPerSample, _ := readFmtSection(file)
+			result.audioFormat = audioFmt
+			result.numChannels = numChan
+			result.sampleRate = sampleRate
+			result.bitsPerSample = bitsPerSample
+		case "data":
+			data := readDataSection(file)
+			result.data = data
+		default:
+			readUnknownChunk(file)
+		}
+	}
+	return
 }
 
-func readFmtSection(file *os.File) (af uint16, nc uint16, sr uint32, br uint32, ba uint16, bps uint16, extra []byte) {
-	err := readId(file, []byte("fmt "))
+func readUnknownChunk(file io.Reader) {
+	// https://github.com/python/cpython/blob/master/Lib/chunk.py
+	dst := make([]byte, 4)
+	_, err := file.Read(dst)
 	if err != nil {
 		panic(err)
 	}
-	dst := make([]byte, 4)
+	size := binary.LittleEndian.Uint32(dst) - 8
+	dst = make([]byte, size)
+  // data lies within this subchunk
 	_, err = file.Read(dst)
+}
+
+func readFmtSection(file io.Reader) (af uint16, nc uint16, sr uint32, br uint32, ba uint16, bps uint16, extra []byte) {
+	dst := make([]byte, 4)
+	_, err := file.Read(dst)
 	if err != nil {
 		panic(err)
 	}
@@ -97,13 +123,9 @@ func readFmtSection(file *os.File) (af uint16, nc uint16, sr uint32, br uint32, 
 	return
 }
 
-func readDataSection(file *os.File) []byte {
-	err := readId(file, []byte("data"))
-	if err != nil {
-		panic(err)
-	}
+func readDataSection(file io.Reader) []byte {
 	dst := make([]byte, 4)
-	_, err = file.Read(dst)
+	_, err := file.Read(dst)
 	if err != nil {
 		panic(err)
 	}
